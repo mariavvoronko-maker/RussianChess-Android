@@ -49,7 +49,23 @@ jobs:
             buildozer-${{ runner.os }}-
 
       - name: Build debug APK
-        run: buildozer -v android debug
+        shell: bash
+        run: |
+          set +e
+          buildozer -v android debug 2>&1 | tee build.log
+          status=${PIPESTATUS[0]}
+          echo "BUILD_EXIT_CODE=$status"
+          echo "----- LAST 250 BUILD LOG LINES -----"
+          tail -n 250 build.log || true
+          exit $status
+
+      - name: Upload diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: RussianChess-build-log
+          path: build.log
+          if-no-files-found: warn
 
       - name: Show APK
         run: find bin -maxdepth 1 -type f -name "*.apk" -print -exec ls -lh {} \;
