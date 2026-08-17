@@ -51,6 +51,25 @@ jobs:
           rm -rf .buildozer
           rm -rf bin
 
+      - name: Apply Kivy startup hotfix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("russian_chess/ui_mobile.py")
+          text = path.read_text(encoding="utf-8")
+          found = text.count("self.pos")
+          if found != 3:
+              raise SystemExit(f"Expected exactly 3 self.pos references, found {found}")
+          text = text.replace("self.pos=Label(color=MUTED)", "self.history_pos=Label(color=MUTED)", 1)
+          text = text.replace("nav.add_widget(self.pos)", "nav.add_widget(self.history_pos)", 1)
+          text = text.replace("self.pos.text=", "self.history_pos.text=", 1)
+          if "self.pos" in text:
+              raise SystemExit("Kivy reserved self.pos reference remains after patch")
+          path.write_text(text, encoding="utf-8")
+          print("Patched Root history-position label: self.pos -> self.history_pos")
+          PY
+
       - name: Build debug APK
         shell: bash
         run: |

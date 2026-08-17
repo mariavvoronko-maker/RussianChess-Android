@@ -1,4 +1,4 @@
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 import traceback
 
@@ -8,8 +8,9 @@ def _run():
         from russian_chess.ui_mobile import run_mobile
         run_mobile()
     except Exception:
-        # Android startup diagnostics: instead of silently closing after the
-        # Kivy presplash, show the Python traceback on screen.
+        # Startup diagnostics: instead of silently closing after the Kivy
+        # presplash, show the Python traceback on screen so the next failure
+        # can be diagnosed without adb/logcat.
         details = traceback.format_exc()
         print(details, flush=True)
         try:

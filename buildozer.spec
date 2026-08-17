@@ -5,7 +5,7 @@ package.domain = ru.vibeapps
 source.dir = .
 source.include_exts = py,png,wav,json,txt,md
 source.exclude_dirs = tests,__pycache__,.pytest_cache,.git,.github
-version = 0.1.1
+version = 0.1.2
 requirements = python3,kivy==2.3.0
 orientation = portrait
 fullscreen = 0
