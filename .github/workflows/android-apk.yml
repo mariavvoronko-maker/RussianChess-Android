@@ -38,15 +38,20 @@ jobs:
           python -m pip install --upgrade pip wheel
           python -m pip install buildozer setuptools cython==0.29.36
 
-      - name: Cache Android toolchain
+      - name: Cache Android downloads only
         uses: actions/cache@v4
         with:
-          path: |
-            ~/.buildozer
-            .buildozer
-          key: buildozer-v2-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+          path: ~/.buildozer
+          key: buildozer-v3-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
           restore-keys: |
-            buildozer-v2-${{ runner.os }}-
+            buildozer-v3-${{ runner.os }}-
+
+      - name: Reset local Android build state
+        run: |
+          # Never reuse project-local build/venv state: a partially upgraded
+          # target pip can otherwise be restored by CI and corrupt the next run.
+          rm -rf .buildozer
+          rm -rf bin
 
       - name: Build debug APK
         shell: bash

@@ -17,6 +17,11 @@ android.accept_sdk_license = True
 android.copy_libs = 1
 android.private_storage = True
 
+# Pin python-for-android to the current stable 2026 release.
+# This keeps CI reproducible instead of building against a moving master HEAD.
+p4a.branch = master
+p4a.commit = 58d21141f17c889bf8585f5665921d72028f8831
+
 [buildozer]
 log_level = 2
 warn_on_root = 1
