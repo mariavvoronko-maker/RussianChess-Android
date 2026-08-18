@@ -29,29 +29,92 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk python3-pip python3-virtualenv \
+            git zip unzip curl librsvg2-bin openjdk-17-jdk python3-pip python3-virtualenv \
             autoconf libtool libltdl-dev pkg-config zlib1g-dev libncurses-dev \
             libtinfo6 cmake libffi-dev libssl-dev automake autopoint gettext
           java -version
 
-      - name: Install Buildozer and asset generator
+      - name: Install Buildozer and validation tools
         run: |
           python -m pip install --upgrade "pip<25" wheel setuptools
           python -m pip install buildozer==1.5.0 cython==0.29.36 pillow
           python --version
           buildozer --version
 
-      - name: Generate mobile chess pieces
+      - name: Generate verified Lichess Cburnett pieces
+        shell: bash
         run: |
-          python tools/generate_pieces.py
-          test $(find russian_chess/assets/pieces -maxdepth 1 -type f -name "*.png" | wc -l) -eq 12
-          find russian_chess/assets/pieces -maxdepth 1 -type f -name "*.png" -print -exec ls -lh {} \;
+          set -euo pipefail
+          PIECE_DIR="russian_chess/assets/pieces"
+          mkdir -p "$PIECE_DIR"
+          rm -f "$PIECE_DIR"/*.png
+          LILA_REV="1e055e6685e6056ddb9a7c742d9e8b7b551cea77"
+          BASE="https://raw.githubusercontent.com/lichess-org/lila/${LILA_REV}/public/piece/cburnett"
+
+          declare -A MAP=(
+            [wK]=white_king [wQ]=white_queen [wR]=white_rook
+            [wB]=white_bishop [wN]=white_knight [wP]=white_pawn
+            [bK]=black_king [bQ]=black_queen [bR]=black_rook
+            [bB]=black_bishop [bN]=black_knight [bP]=black_pawn
+          )
+
+          for src in wK wQ wR wB wN wP bK bQ bR bB bN bP; do
+            curl -fsSL "$BASE/${src}.svg" -o "/tmp/${src}.svg"
+            rsvg-convert -w 256 -h 256 "/tmp/${src}.svg" -o "$PIECE_DIR/${MAP[$src]}.png"
+          done
+
+          test "$(find "$PIECE_DIR" -maxdepth 1 -type f -name '*.png' | wc -l)" -eq 12
+
+      - name: Validate piece images before APK build
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+
+          d = Path("russian_chess/assets/pieces")
+          kinds = ("king", "queen", "rook", "bishop", "knight", "pawn")
+
+          for kind in kinds:
+              p = d / f"white_{kind}.png"
+              im = Image.open(p).convert("RGBA")
+              if im.size != (256, 256):
+                  raise SystemExit(f"Unexpected size: {p} {im.size}")
+              opaque = [px for px in im.getdata() if px[3] > 240]
+              pure_white = sum(1 for r,g,b,a in opaque if r == 255 and g == 255 and b == 255)
+              if pure_white < 2000:
+                  raise SystemExit(f"White piece is not actually white: {p}, pure white={pure_white}")
+
+          for kind in kinds:
+              p = d / f"black_{kind}.png"
+              im = Image.open(p).convert("RGBA")
+              opaque = [px for px in im.getdata() if px[3] > 240]
+              pure_black = sum(1 for r,g,b,a in opaque if r == 0 and g == 0 and b == 0)
+              if pure_black < 2000:
+                  raise SystemExit(f"Black piece is not actually black: {p}, pure black={pure_black}")
+
+          # Produce a board-colour preview before the APK build.
+          light=(232,217,181); dark=(157,109,78)
+          preview=Image.new("RGB",(6*180,2*180),(30,30,30)); draw=ImageDraw.Draw(preview)
+          for row,color in enumerate(("white","black")):
+              for col,kind in enumerate(kinds):
+                  draw.rectangle((col*180,row*180,(col+1)*180,(row+1)*180), fill=light if (col+row)%2==0 else dark)
+                  piece=Image.open(d/f"{color}_{kind}.png").convert("RGBA").resize((150,150),Image.Resampling.LANCZOS)
+                  preview.paste(piece,(col*180+15,row*180+15),piece)
+          preview.save("piece-preview.png")
+          print("Validated exact white/black piece colours and generated preview")
+          PY
 
       - name: Cache Android downloads only
         uses: actions/cache@v4
         with:
           path: ~/.buildozer
           key: buildozer-stable2024-v1-${{ runner.os }}-${{ hashFiles('buildozer.spec') }}
+
+      - name: Cache Android debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: russianchess-debug-keystore-v1
 
       - name: Reset local Android build state
         run: |
@@ -66,16 +129,69 @@ jobs:
           path = Path("russian_chess/ui_mobile.py")
           text = path.read_text(encoding="utf-8")
           found = text.count("self.pos")
-          if found != 3:
-              raise SystemExit(f"Expected exactly 3 self.pos references, found {found}")
-          text = text.replace("self.pos=Label(color=MUTED)", "self.history_pos=Label(color=MUTED)", 1)
-          text = text.replace("nav.add_widget(self.pos)", "nav.add_widget(self.history_pos)", 1)
-          text = text.replace("self.pos.text=", "self.history_pos.text=", 1)
+          if found == 3:
+              text = text.replace("self.pos=Label(color=MUTED)", "self.history_pos=Label(color=MUTED)", 1)
+              text = text.replace("nav.add_widget(self.pos)", "nav.add_widget(self.history_pos)", 1)
+              text = text.replace("self.pos.text=", "self.history_pos.text=", 1)
           if "self.pos" in text:
               raise SystemExit("Kivy reserved self.pos reference remains after patch")
           path.write_text(text, encoding="utf-8")
-          print("Patched Root history-position label: self.pos -> self.history_pos")
           PY
+
+      - name: Apply neutral piece colours and delicate move glow
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("russian_chess/ui_mobile.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = """    def piece(self,p,sq,shift=0,scale=.86):\n        x,y,w,h=self.rect(sq); size=min(w,h)*scale\n        Rectangle(texture=texture_for(p.color,p.kind),pos=(x+(w-size)/2+shift,y+(h-size)/2),size=(size,size))\n\n    def piece_xy(self,p,xy):\n        side=min(self.width,self.height); size=side/8*.86\n        Rectangle(texture=texture_for(p.color,p.kind),pos=(xy[0]-size/2,xy[1]-size/2),size=(size,size))\n\n    def redraw(self):\n"""
+          new = """    def piece(self,p,sq,shift=0,scale=.86):\n        x,y,w,h=self.rect(sq); size=min(w,h)*scale\n        # Textures must never inherit the colour of move/highlight graphics.\n        GColor(1,1,1,1)\n        Rectangle(texture=texture_for(p.color,p.kind),pos=(x+(w-size)/2+shift,y+(h-size)/2),size=(size,size))\n\n    def piece_xy(self,p,xy):\n        side=min(self.width,self.height); size=side/8*.86\n        GColor(1,1,1,1)\n        Rectangle(texture=texture_for(p.color,p.kind),pos=(xy[0]-size/2,xy[1]-size/2),size=(size,size))\n\n    def glow(self,sq,color=GOLD,strength=1.0):\n        # A small halo behind the piece, not a coloured square and not a texture tint.\n        x,y,w,h=self.rect(sq); r,g,b,a=color\n        for scale,alpha in ((.80,.035),(.70,.055),(.61,.075)):\n            sw=w*scale; sh=h*scale\n            GColor(r,g,b,min(1,a*alpha*strength))\n            Ellipse(pos=(x+(w-sw)/2,y+(h-sh)/2),size=(sw,sh))\n\n    def redraw(self):\n"""
+          if old not in text:
+              raise SystemExit("Piece drawing block did not match; refusing unsafe patch")
+          text = text.replace(old,new,1)
+
+          old = """            for sq in self.highlights:\n                x,y,w,h=self.rect(sq); GColor(*GOLD); Line(rectangle=(x+2,y+2,w-4,h-4),width=dp(2.2))\n            osq=overlay[1] if overlay else None\n"""
+          new = """            for sq in self.highlights:\n                self.glow(sq,GOLD,.72)\n            if c.selected_piece_id is not None and not c.prefix and self.display_board is None:\n                p=c.state.pieces[c.selected_piece_id]\n                if p.square: self.glow(p.square,GOLD,.90)\n            if overlay:\n                self.glow(overlay[1],BLUE,.42)\n            osq=overlay[1] if overlay else None\n"""
+          if old not in text:
+              raise SystemExit("Highlight block did not match; refusing unsafe patch")
+          text = text.replace(old,new,1)
+
+          old = """            if c.selected_piece_id is not None and not c.prefix and self.display_board is None:\n                p=c.state.pieces[c.selected_piece_id]\n                if p.square: x,y,w,h=self.rect(p.square); GColor(*GOLD); Line(rectangle=(x+2,y+2,w-4,h-4),width=dp(2.3))\n"""
+          if old not in text:
+              raise SystemExit("Old selected-square border did not match; refusing unsafe patch")
+          text = text.replace(old,"",1)
+
+          # Safety checks: two texture draws must be preceded by neutral white colour.
+          if text.count("GColor(1,1,1,1)") < 2:
+              raise SystemExit("Neutral texture colour reset missing")
+          if "Line(rectangle=(x+2,y+2,w-4,h-4),width=dp(2.2))" in text:
+              raise SystemExit("Old AI square highlight still present")
+
+          path.write_text(text,encoding="utf-8")
+          print("Applied neutral texture colour and subtle halo highlighting")
+          PY
+
+      - name: Validate rendering patch before APK build
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          t=Path("russian_chess/ui_mobile.py").read_text(encoding="utf-8")
+          assert t.count("GColor(1,1,1,1)") >= 2
+          assert "def glow(" in t
+          assert "self.glow(sq,GOLD,.72)" in t
+          assert "self.glow(p.square,GOLD,.90)" in t
+          assert "Line(rectangle=(x+2,y+2,w-4,h-4),width=dp(2.2))" not in t
+          print("Rendering patch validated before Buildozer starts")
+          PY
+
+      - name: Upload piece preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: RussianChess-piece-preview
+          path: piece-preview.png
+          if-no-files-found: error
 
       - name: Build debug APK
         shell: bash
