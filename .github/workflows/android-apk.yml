@@ -7,6 +7,7 @@ on:
     paths:
       - "main.py"
       - "russian_chess/**"
+      - "tools/**"
       - "buildozer.spec"
       - ".github/workflows/android-apk.yml"
 
@@ -33,12 +34,18 @@ jobs:
             libtinfo6 cmake libffi-dev libssl-dev automake autopoint gettext
           java -version
 
-      - name: Install Buildozer
+      - name: Install Buildozer and asset generator
         run: |
           python -m pip install --upgrade "pip<25" wheel setuptools
-          python -m pip install buildozer==1.5.0 cython==0.29.36
+          python -m pip install buildozer==1.5.0 cython==0.29.36 pillow
           python --version
           buildozer --version
+
+      - name: Generate mobile chess pieces
+        run: |
+          python tools/generate_pieces.py
+          test $(find russian_chess/assets/pieces -maxdepth 1 -type f -name "*.png" | wc -l) -eq 12
+          find russian_chess/assets/pieces -maxdepth 1 -type f -name "*.png" -print -exec ls -lh {} \;
 
       - name: Cache Android downloads only
         uses: actions/cache@v4
